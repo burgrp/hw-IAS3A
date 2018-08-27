@@ -1,11 +1,11 @@
 const int VALUE_UNKNOWN = -1;
 
-const int ADC_CHANNEL_WATER_PRESSURE = 1;
-const int ADC_CHANNEL_REFRIGERANT_PRESSURE = 2;
+struct AdcChannel {
+	int pin;
+	short* target;	
+};
 
 class IAS3: public i2c::hw::BufferedSlave, genericTimer::Timer {
-
-	int conv = 0;
 
 	struct {
 		short waterFlow = VALUE_UNKNOWN;
@@ -13,33 +13,38 @@ class IAS3: public i2c::hw::BufferedSlave, genericTimer::Timer {
 		short refrigerantPressure = VALUE_UNKNOWN;
 	} data;
 
+	AdcChannel adcChannels[2] = {
+		{.pin = 1, .target = &data.waterPressure},
+		{.pin = 2, .target = &data.refrigerantPressure}
+	};
+
+	int adcChannel;
+
 public:
 
 	void init(target::i2c::Peripheral* peripheral, int address) {
 		BufferedSlave::init(peripheral, address, NULL, 0, (unsigned char*)&data, sizeof(data));
+		for (int c = 0; c < sizeof(adcChannels) / sizeof(AdcChannel); c++) {
+			target::GPIOA.MODER.setMODER(adcChannels[c].pin, 3);
+		}
 	}
 
 	virtual void onTimer() {
+		startAdcConversion();		
+	}
+
+	void startAdcConversion() {
+		target::ADC.CHSELR.setCHSEL(1 << adcChannels[adcChannel].pin);
 		target::ADC.CR.setADSTART(1);
 	}
 
-	void startTimer() {
-		start(100);
-	}
-
 	void endOfConversion(int value) {
-		if (conv == 0) {
-			data.waterPressure = value;
+		*adcChannels[adcChannel].target = value;
+		adcChannel++;
+		if (adcChannel >= sizeof(adcChannels) / sizeof(AdcChannel)) {
+			adcChannel = 0;
 		}
-		if (conv == 1) {
-			data.refrigerantPressure = value;
-		}
-		conv++;
-	}
-
-	void endOfConversionSequence() {
-		conv = 0;
-		startTimer();
+		start(100);
 	}
 
 };
@@ -50,14 +55,9 @@ void interruptHandlerI2C1() {
 	ias3.handleInterrupt();
 }
 
-
 void interruptHandlerADC() {	
 	if (target::ADC.ISR.getEOC()) {
 		ias3.endOfConversion(target::ADC.DR.getDATA());
-	}
-	if (target::ADC.ISR.getEOS()) {
-		target::ADC.ISR.setEOS(1);
-		ias3.endOfConversionSequence();
 	}
 }
 
@@ -74,19 +74,13 @@ void initApplication() {
 	target::NVIC.ISER.setSETENA(1 << target::interrupts::External::I2C1);
 
 	// ADC peripheral
-	target::GPIOA.MODER.setMODER(ADC_CHANNEL_WATER_PRESSURE, 3);
-	target::GPIOA.MODER.setMODER(ADC_CHANNEL_REFRIGERANT_PRESSURE, 3);	
 	target::RCC.APB2ENR.setADCEN(1);
 	target::ADC.CR.setADEN(1);
 	target::ADC.CFGR2 = 30 << 1; // CKMODE[1:0] = 01, broken svd definition
 	target::ADC.SMPR.setSMPR(7);
-	target::ADC.CHSELR.setCHSEL(ADC_CHANNEL_WATER_PRESSURE, 1);
-	target::ADC.CHSELR.setCHSEL(ADC_CHANNEL_REFRIGERANT_PRESSURE, 1);
 	target::ADC.IER.setEOCIE(1);
-	target::ADC.IER.setEOSIE(1);
-
 	target::NVIC.ISER.setSETENA(1 << target::interrupts::External::ADC);
 	
 	ias3.init(&target::I2C1, 0x70);
-	ias3.startTimer();
+	ias3.startAdcConversion();
 }
