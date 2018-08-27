@@ -44,7 +44,7 @@ public:
 		if (adcChannel >= sizeof(adcChannels) / sizeof(AdcChannel)) {
 			adcChannel = 0;
 		}
-		start(100);
+		start(10);
 	}
 
 };

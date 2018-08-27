@@ -13,7 +13,7 @@ async function test() {
     } catch (e) {
         console.error(e);
     }
-    setTimeout(test, 2000);
+    setTimeout(test, 500);
 }
 
 test();
