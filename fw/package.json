@@ -9,6 +9,7 @@
 	},
 	"silicon": {
 		"sources": [
+			"periodic-adc.cpp",
 			"ias3a.cpp"
 		],
 		"symbols": {

@@ -1,6 +1,6 @@
 const i2c = require("@device.farm/usb-i2c-driver").open();
 
-const address = 0x70;
+const address = 0x72;
 
 //let x = 0;
 

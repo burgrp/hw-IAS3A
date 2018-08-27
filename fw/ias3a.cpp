@@ -1,11 +1,33 @@
 const int VALUE_UNKNOWN = -1;
 
-struct AdcChannel {
-	int pin;
-	short* target;	
+class FrequencyMeter: public genericTimer::Timer {
+	int counter;
+	int extiNo;
+	short* target;
+public:
+	void init(int extiNo, short* target) {
+		this->extiNo = extiNo;
+		this->target = target;
+		target::EXTI.FTSR.setTR(extiNo, 1);
+		target::EXTI.IMR.setMR(extiNo, 1);
+		start(100);
+	}
+
+	virtual void onTimer() {
+		*target = counter;
+		counter = 0;
+		start(100);
+	}
+
+	void handleInterrupt() {
+		if (target::EXTI.PR.getPR(extiNo)) {
+			counter++;
+			target::EXTI.PR.setPR(extiNo, 1);
+		}
+	}
 };
 
-class IAS3: public i2c::hw::BufferedSlave, genericTimer::Timer {
+class IAS3{
 
 	struct {
 		short waterFlow = VALUE_UNKNOWN;
@@ -18,33 +40,16 @@ class IAS3: public i2c::hw::BufferedSlave, genericTimer::Timer {
 		{.pin = 2, .target = &data.refrigerantPressure}
 	};
 
-	int adcChannel;
-
 public:
 
+	i2c::hw::BufferedSlave i2c;
+	FrequencyMeter frequencyMeter;
+	PeriodicAdc adc;
+
 	void init(target::i2c::Peripheral* peripheral, int address) {
-		BufferedSlave::init(peripheral, address, NULL, 0, (unsigned char*)&data, sizeof(data));
-		for (int c = 0; c < sizeof(adcChannels) / sizeof(AdcChannel); c++) {
-			target::GPIOA.MODER.setMODER(adcChannels[c].pin, 3);
-		}
-	}
-
-	virtual void onTimer() {
-		startAdcConversion();		
-	}
-
-	void startAdcConversion() {
-		target::ADC.CHSELR.setCHSEL(1 << adcChannels[adcChannel].pin);
-		target::ADC.CR.setADSTART(1);
-	}
-
-	void endOfConversion(int value) {
-		*adcChannels[adcChannel].target = value;
-		adcChannel++;
-		if (adcChannel >= sizeof(adcChannels) / sizeof(AdcChannel)) {
-			adcChannel = 0;
-		}
-		start(10);
+		i2c.init(peripheral, address, NULL, 0, (unsigned char*)&data, sizeof(data));
+		frequencyMeter.init(0, &data.waterFlow);
+		adc.init(10, adcChannels, sizeof(adcChannels) / sizeof(AdcChannel));		
 	}
 
 };
@@ -52,13 +57,15 @@ public:
 IAS3 ias3;
 
 void interruptHandlerI2C1() {
-	ias3.handleInterrupt();
+	ias3.i2c.handleInterrupt();
 }
 
 void interruptHandlerADC() {	
-	if (target::ADC.ISR.getEOC()) {
-		ias3.endOfConversion(target::ADC.DR.getDATA());
-	}
+	ias3.adc.handleInterrupt();
+}
+
+void interruptHandlerEXTI0_1() {
+	ias3.frequencyMeter.handleInterrupt();
 }
 
 void initApplication() {
@@ -75,12 +82,29 @@ void initApplication() {
 
 	// ADC peripheral
 	target::RCC.APB2ENR.setADCEN(1);
-	target::ADC.CR.setADEN(1);
-	target::ADC.CFGR2 = 30 << 1; // CKMODE[1:0] = 01, broken svd definition
-	target::ADC.SMPR.setSMPR(7);
-	target::ADC.IER.setEOCIE(1);
 	target::NVIC.ISER.setSETENA(1 << target::interrupts::External::ADC);
-	
-	ias3.init(&target::I2C1, 0x70);
-	ias3.startAdcConversion();
+
+	// EXTI for frequency meter	
+	target::GPIOA.MODER.setMODER(0, 0);
+	target::GPIOA.PUPDR.setPUPDR(0, 1);
+	target::SYSCFG.EXTICR1.setEXTI(0, 0);
+	target::NVIC.ISER.setSETENA(1 << target::interrupts::External::EXTI0_1);
+
+	// check address switch
+	const int addrPin = 3;
+	int address;
+	target::GPIOA.MODER.setMODER(addrPin, 0);
+	target::GPIOA.PUPDR.setPUPDR(addrPin, 1);
+	if (target::GPIOA.IDR.getIDR(addrPin) == 0) {
+		address = 0x70;
+	} else {
+		target::GPIOA.PUPDR.setPUPDR(addrPin, 2);
+		if (target::GPIOA.IDR.getIDR(addrPin) == 1) {
+			address = 0x71;
+		} else {
+			address = 0x72;
+		}
+	}
+
+	ias3.init(&target::I2C1, address);	
 }
