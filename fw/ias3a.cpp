@@ -95,10 +95,12 @@ void initApplication() {
 	int address;
 	target::GPIOA.MODER.setMODER(addrPin, 0);
 	target::GPIOA.PUPDR.setPUPDR(addrPin, 1);
+	for (volatile int c = 0; c < 1000; c++);
 	if (target::GPIOA.IDR.getIDR(addrPin) == 0) {
 		address = 0x70;
 	} else {
 		target::GPIOA.PUPDR.setPUPDR(addrPin, 2);
+		for (volatile int c = 0; c < 1000; c++);
 		if (target::GPIOA.IDR.getIDR(addrPin) == 1) {
 			address = 0x71;
 		} else {
