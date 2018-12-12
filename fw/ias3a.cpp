@@ -29,6 +29,8 @@ public:
 
 class IAS3{
 
+	iwdg::Driver iwdg;
+
 	struct {
 		short waterFlow = VALUE_UNKNOWN;
 		short waterPressure = VALUE_UNKNOWN;
@@ -47,6 +49,7 @@ public:
 	PeriodicAdc adc;
 
 	void init(target::i2c::Peripheral* peripheral, int address) {
+		iwdg.init();
 		i2c.init(peripheral, address, NULL, 0, (unsigned char*)&data, sizeof(data));
 		frequencyMeter.init(0, &data.waterFlow);
 		adc.init(10, adcChannels, sizeof(adcChannels) / sizeof(AdcChannel));		
