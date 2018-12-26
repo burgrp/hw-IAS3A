@@ -1,29 +1,59 @@
 const int VALUE_UNKNOWN = -1;
 
-class FrequencyMeter: public genericTimer::Timer {
-	int counter;
+const int sampleCount = 512;
+
+class SMT160 {	
 	int extiNo;
 	short* target;
+	volatile target::tim_16_17::Peripheral* timer;
+	int fall = 0;
+	short cnts[sampleCount];
+	short falls[sampleCount];
+	int sampleIndex = 0;
 public:
-	void init(int extiNo, short* target) {
+	void init(int extiNo, short* target, volatile target::tim_16_17::Peripheral* timer) {
 		this->extiNo = extiNo;
 		this->target = target;
 		target::EXTI.FTSR.setTR(extiNo, 1);
+		target::EXTI.RTSR.setTR(extiNo, 1);
 		target::EXTI.IMR.setMR(extiNo, 1);
-		start(100);
-	}
-
-	virtual void onTimer() {
-		*target = counter;
-		counter = 0;
-		start(100);
+		this->timer = timer;			
+		timer->ARR.setARR(0xFFFF);
+		timer->CR1.setCEN(1);
 	}
 
 	void handleInterrupt() {
 		if (target::EXTI.PR.getPR(extiNo)) {
-			counter++;
+			bool rising = target::GPIOA.IDR.getIDR(0);
+			if (rising) {
+				int cnt = timer->CNT;
+				timer->EGR.setUG(1);
+				cnts[sampleIndex] = cnt;
+				falls[sampleIndex] = fall;
+				sampleIndex++;
+				if (sampleIndex == sampleCount) {
+					sampleIndex = 0;
+					int sumCnt = 0;
+					int sumFall = 0;
+					for (int c = 0; c < sampleCount; c++) {
+						sumCnt += cnts[c];
+						sumFall += falls[c];
+					}
+					int avgCnt = sumCnt / sampleCount;
+					int avgFall = sumFall / sampleCount;
+					
+					int v = 0x10000 * avgFall / avgCnt;
+					*target = v;
+				}
+
+			} else {
+				fall = timer->CNT;				
+			}
 			target::EXTI.PR.setPR(extiNo, 1);
 		}
+	}
+
+	int get() {
 	}
 };
 
@@ -32,7 +62,7 @@ class IAS3{
 	iwdg::Driver iwdg;
 
 	struct {
-		short waterFlow = VALUE_UNKNOWN;
+		short refrigerantTemp = VALUE_UNKNOWN;
 		short waterPressure = VALUE_UNKNOWN;
 		short refrigerantPressure = VALUE_UNKNOWN;
 	} data;
@@ -45,13 +75,13 @@ class IAS3{
 public:
 
 	i2c::hw::BufferedSlave i2c;
-	FrequencyMeter frequencyMeter;
+	SMT160 smt160;
 	PeriodicAdc adc;
 
-	void init(target::i2c::Peripheral* peripheral, int address) {
+	void init(target::i2c::Peripheral* peripheral, int address, volatile target::tim_16_17::Peripheral* smtimer) {
 		iwdg.init();
 		i2c.init(peripheral, address, NULL, 0, (unsigned char*)&data, sizeof(data));
-		frequencyMeter.init(0, &data.waterFlow);
+		smt160.init(0, &data.refrigerantTemp, smtimer);
 		adc.init(10, adcChannels, sizeof(adcChannels) / sizeof(AdcChannel));		
 	}
 
@@ -68,7 +98,7 @@ void interruptHandlerADC() {
 }
 
 void interruptHandlerEXTI0_1() {
-	ias3.frequencyMeter.handleInterrupt();
+	ias3.smt160.handleInterrupt();
 }
 
 void initApplication() {
@@ -81,12 +111,17 @@ void initApplication() {
 	target::GPIOA.MODER.setMODER(9, 2);
 	target::GPIOA.MODER.setMODER(10, 2);
 	target::RCC.APB1ENR.setC_EN(1, 1);
+	//target::NVIC.IPR5.setPRI_203(3);
+	//target::NVIC.IPR5 = 0xFFFFFFFF;
 	target::NVIC.ISER.setSETENA(1 << target::interrupts::External::I2C1);
 
 	// ADC peripheral
 	target::RCC.APB2ENR.setADCEN(1);
+	//target::NVIC.IPR3.setPRI_120(3);
+	//target::NVIC.IPR3 = 0xFFFFFFFF;
 	target::NVIC.ISER.setSETENA(1 << target::interrupts::External::ADC);
 
+	target::RCC.APB2ENR.setTIM16EN(1);
 	// EXTI for frequency meter	
 	target::GPIOA.MODER.setMODER(0, 0);
 	target::GPIOA.PUPDR.setPUPDR(0, 1);
@@ -111,5 +146,5 @@ void initApplication() {
 		}
 	}
 
-	ias3.init(&target::I2C1, address);	
+	ias3.init(&target::I2C1, address, &target::TIM16);
 }
